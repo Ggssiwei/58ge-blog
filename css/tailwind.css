@@ -36,6 +36,9 @@
   --color-gray-900: oklch(0.21 0.034 264.665);
   --color-gray-950: oklch(0.13 0.028 261.692);
 
+  /* Light-mode page surface: soft warm off-white instead of pure white */
+  --color-surface: oklch(0.985 0.006 85);
+
   /* Line heights */
   --line-height-11: 2.75rem;
   --line-height-12: 3rem;

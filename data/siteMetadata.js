@@ -2,7 +2,7 @@
 const siteMetadata = {
   title: "58Ge's Blog",
   author: 'GeSong',
-  headerTitle: '58Ge',
+  headerTitle: "Someone's Blog",
   description: 'Stay Shoshin',
   language: 'zh-cn',
   theme: 'system', // system, dark or light
