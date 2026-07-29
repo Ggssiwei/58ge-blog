@@ -1,0 +1,34 @@
+# 项目背景
+
+本仓库是个人博客 **58Ge's Blog**（作者 GeSong），基于 [Tailwind Nextjs Starter Blog](https://github.com/timlrx/tailwind-nextjs-starter-blog) v2 改造。
+
+技术栈要点：
+
+- Next.js App Router + React Server Components
+- Contentlayer 管理 `data/blog/**/*.mdx` 文章与 `data/authors/**/*.mdx` 作者信息
+- Tailwind CSS v4（主题色在 `css/tailwind.css` 的 `@theme`；亮暗模式靠组件内 `dark:` 与 `next-themes` 的 `.dark` class，无独立亮/暗配色文件）
+- Pliny 提供分析、评论、Newsletter、搜索等能力
+- 站点配置集中在 `data/siteMetadata.js`；导航在 `data/headerNavLinks.ts`；项目页数据在 `data/projectsData.ts`
+
+编码约定：
+
+- 优先沿用现有目录与组件模式（`app/`、`components/`、`layouts/`、`data/`），避免引入无关架构
+- 改主题/配色时：色板改 `@theme`，亮暗表现改对应组件的 `dark:` class
+- 新博文放 `data/blog/`，frontmatter 与现有 MDX 保持一致
+- 与用户交流、文档说明、Git commit message 一律使用简体中文
+
+# Git Commit Message
+
+当 Cursor 自动生成 Git commit message 时，必须使用简体中文。
+
+格式遵循 Conventional Commits，例如：
+
+- `feat: 添加项目页卡片展示`
+- `fix: 修复暗色模式下导航背景色异常`
+- `refactor: 调整文章列表布局结构`
+- `docs: 更新 README 部署说明`
+- `chore: 清理无用的示例博文与静态资源`
+- `style: 统一页脚社交图标间距`
+- `content: 新增一篇关于 OLS 估计的博文`
+
+常用类型：`feat`、`fix`、`refactor`、`docs`、`style`、`test`、`chore`、`perf`、`ci`、`build`、`content`。
