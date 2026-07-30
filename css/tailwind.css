@@ -176,3 +176,19 @@ input:-webkit-autofill:focus {
   display: inline-block;
   vertical-align: middle;
 }
+
+/*
+  9-slice wood box frame (wood-box.svg is 128×128, center 32×32 is content).
+  Slice = (128 - 32) / 2 = 48 on each side.
+*/
+.wood-box-border {
+  border-style: solid;
+  border-width: 32px;
+  border-image-source: url('/static/images/wood-box.svg');
+  border-image-slice: 32;
+  border-image-width: 32px;
+  border-image-repeat: round;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
