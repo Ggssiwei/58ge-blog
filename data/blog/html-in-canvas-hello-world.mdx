@@ -1,0 +1,165 @@
+---
+title: '从 Hello World 入门 HTML-in-Canvas'
+date: '2026-07-31'
+tags: ['canvas', 'html', 'chromium', 'web']
+draft: false
+summary: '基于官方 Hello World demo，梳理 HTML-in-Canvas 的先决条件，以及 layoutsubtree、drawElementImage、onpaint 的最小工作流。'
+---
+
+[HTML-in-Canvas](https://html-in-canvas.dev/demos/hello-world/) 试图解决一个老问题：用 Canvas / WebGL / WebGPU 做高性能渲染时，往往要放弃 HTML 自带的排版、选区、表单和无障碍能力。新的实验 API 允许把**真实 DOM 元素**画进 canvas，同时尽量保住这些能力。
+
+官方最简示例是 [Hello World](https://html-in-canvas.dev/demos/hello-world/)：一个带渐变字的 `div`，被反复绘制成旋转光环，中间还有一份可编辑、可选中的「主角」副本。
+
+## 在线 Demo
+
+下面是把官方 Hello World 嵌进本站的交互版本。组件会先检测当前浏览器是否支持 HTML-in-Canvas：支持则直接运行；不支持则提示开启方式（详见下文「先决条件」）。
+
+<HtmlInCanvasHelloWorld />
+
+## 先决条件
+
+HTML-in-Canvas **还不是**全平台默认能力，跑 demo 前需要同时满足下面几条。
+
+### 1. 浏览器版本
+
+目前主要可用环境（见 [Browser Support](https://html-in-canvas.dev/docs/browser-support/)）：
+
+| 浏览器 | 要求 |
+| --- | --- |
+| **Chrome Canary** | 开启实验 flag |
+| **Brave Stable** | Chromium **147+**（文档确认过约 Brave 1.89.132 / Chromium 147.0.7727.56），并开启 flag |
+| Firefox / Safari | 暂无实现 |
+| 其他 Chromium 分支 | 取决于底层 Chromium 是否已合入相关代码，可自行尝试同名 flag |
+
+没有匹配版本时，页面通常会提示 *API Unavailable*，demo 无法真正绘制。
+
+### 2. 打开实验 Flag
+
+在地址栏打开（Chrome 出于安全考虑不能直接从网页跳转到 `chrome://`，需要手动粘贴）：
+
+- Chrome Canary：`chrome://flags/#canvas-draw-element`
+- Brave：`brave://flags/#canvas-draw-element`
+
+将 **Enable the new drawElement API for Canvas** 设为 **Enabled**，然后**重启浏览器**。
+
+该 flag 对应 Chromium 的 `CanvasDrawElement` 实验，细节可参考 [Chrome Platform Status](https://chromestatus.com/feature/5172548013916160) 与 [Intent to Experiment](https://groups.google.com/a/chromium.org/g/blink-dev/c/t_nGEmJ_v4s)。
+
+### 3. 环境自检（推荐）
+
+跑自己的页面时，先确认 API 是否存在：
+
+```js
+const canvas = document.querySelector('canvas')
+const ctx = canvas.getContext('2d')
+
+const drawElementInto =
+  ctx.drawElementImage?.bind(ctx) ?? ctx.drawElement?.bind(ctx)
+
+if (!drawElementInto) {
+  console.warn('HTML-in-Canvas 不可用：请检查浏览器版本与 canvas-draw-element flag')
+}
+```
+
+Hello World demo 里也做了 `drawElementImage` / `drawElement` 双名兼容——Canary 早期可能同时暴露两套命名，规范侧更偏向 `drawElementImage`。
+
+## Demo 在做什么
+
+[Hello World](https://html-in-canvas.dev/demos/hello-world/) 的结构可以概括成三层：
+
+1. **一个真实 DOM**：`<div id="content">Hello, Canvas!</div>`，用户可改文字、可选中。
+2. **一块带 `layoutsubtree` 的 canvas**：子树在 canvas 内参与布局，才能被「画进去」。
+3. **每帧 `onpaint`**：用同一个 DOM 画多份环上的副本，再画中心 hero，并把返回的变换写回 DOM，让命中测试 / 选区和像素对齐。
+
+核心标记大致是：
+
+```html
+<canvas id="canvas" layoutsubtree>
+  <div id="content">Hello, Canvas!</div>
+</canvas>
+```
+
+`layoutsubtree` 是 opt-in：告诉浏览器「请布局并维护这块 canvas 里的子树」，否则就不会有可供 `drawElementImage` 使用的绘制记录。
+
+## 最小绘制循环
+
+### 注册绘制回调
+
+```js
+canvas.onpaint = () => {
+  ctx.reset()
+  // …变换、透明度、drawElementInto(content, dx, dy)
+}
+```
+
+动画不要只靠自己瞎画 bitmap，而应通过 `canvas.requestPaint?.()` 走进浏览器的 paint 管道，让 `drawElementImage` 依赖的缓存绘制记录保持更新：
+
+```js
+function loop(now) {
+  phase += ((now - lastFrame) / 1000) * speed * 0.6
+  lastFrame = now
+  canvas.requestPaint?.()
+  requestAnimationFrame(loop)
+}
+```
+
+### 把同一个元素画很多次
+
+环上的装饰副本只负责「看起来花」，不必同步 DOM：
+
+```js
+ctx.save()
+ctx.translate(px, py)
+ctx.rotate(angle + Math.PI / 2)
+ctx.scale(scale, scale)
+ctx.globalAlpha = 0.25 + depth * 0.75
+drawElementInto(content, -halfW, -halfH)
+ctx.restore()
+```
+
+中心 hero 最后画，并把返回的 `DOMMatrix` 写回元素，这样文字选区仍能对上画面：
+
+```js
+const heroTransform = drawElementInto(content, -halfW, -halfH)
+if (heroTransform) {
+  content.style.transform = heroTransform.toString()
+}
+```
+
+### 尺寸：按 CSS 像素 1:1，而不是 DPR 放大
+
+Chrome 的 `layoutsubtree` 会把 **`canvas.width` / `canvas.height` 当作子树的布局视口**。若按传统 Retina 写法把 bitmap 乘上 `devicePixelRatio`，子树布局宽度会被拉大，百分比 padding、换行都会错。
+
+Demo 的做法是：
+
+```js
+new ResizeObserver(([entry]) => {
+  const { width, height } = entry.contentRect
+  canvas.width = Math.round(width)
+  canvas.height = Math.round(height)
+  canvas.requestPaint?.()
+}).observe(canvas)
+```
+
+代价是高分屏上可能略糊一点，但布局语义是对的。
+
+## 三个关键原语（记这组就够）
+
+结合 [Spec Overview](https://html-in-canvas.dev/docs/overview/) 与 Hello World，日常会碰到的是：
+
+| 原语 | 作用 |
+| --- | --- |
+| `layoutsubtree`（属性） | 让 canvas 子树参与布局，成为可绘制源 |
+| `drawElementImage`（2D） | 把子元素画进 2D context（另有 WebGL / WebGPU 对应接口） |
+| `onpaint` + `requestPaint` | 在浏览器绘制管线中更新画面 |
+
+动机很直接：高性能自定义渲染，又不必从零重做排版、交互和无障碍。详见 [ChromeStatus 概述](https://chromestatus.com/feature/5172548013916160)。
+
+## 小结
+
+要玩 HTML-in-Canvas，先确认：
+
+1. **Chrome Canary** 或 **Brave Stable（Chromium 147+）**
+2. 打开 **`chrome://flags/#canvas-draw-element`**（Brave 用 `brave://`）并重启
+3. 代码侧探测 `drawElementImage` / `drawElement` 是否存在
+
+然后按 Hello World 的模式：`layoutsubtree` 挂子树 → `onpaint` 里 `drawElementImage` → 用 `requestPaint` 驱动帧循环 → bitmap 与 CSS 像素 1:1。

@@ -1,4 +1,8 @@
 {
+  "canvas": 1,
+  "html": 1,
+  "chromium": 1,
+  "web": 1,
   "next-js": 6,
   "tailwind": 3,
   "guide": 5,
