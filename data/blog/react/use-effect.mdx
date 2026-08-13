@@ -1,0 +1,177 @@
+---
+title: 'React Hook 专题：useEffect'
+date: '2026-08-05'
+tags: ['react', 'hooks', 'useEffect']
+draft: false
+summary: '从用法、执行时机与依赖数组讲清 useEffect，并梳理 Strict Mode 双调用、陈旧闭包、无限循环等常见问题与官方推荐解法。'
+---
+
+`useEffect` 用来把组件和**外部系统**同步起来：订阅、定时器、命令式 DOM API、第三方 SDK 等。官方文档强调：若没有「React 之外」的东西需要同步，你多半**不需要** Effect（见 [You Might Not Need an Effect](https://react.dev/learn/you-might-not-need-an-effect)）。
+
+本文基于 [react.dev 的 useEffect 参考](https://react.dev/reference/react/useEffect)，覆盖用法、原理与常见坑。
+
+## 基本用法
+
+```tsx
+import { useEffect, useState } from 'react'
+
+function ChatRoom({ roomId }: { roomId: string }) {
+  const [serverUrl, setServerUrl] = useState('https://localhost:1234')
+
+  useEffect(() => {
+    const connection = createConnection(serverUrl, roomId)
+    connection.connect()
+    return () => connection.disconnect()
+  }, [serverUrl, roomId])
+
+  // ...
+}
+```
+
+签名：
+
+```ts
+useEffect(setup, dependencies?)
+```
+
+- **setup**：挂载后（以及依赖变化后）执行；可返回 **cleanup**。
+- **dependencies**：可选依赖数组。省略则每次提交后都跑；`[]` 表示只在挂载时同步一次（严格模式下开发环境仍会多跑一轮，见下文）。
+
+## 原理：在「提交」之后同步
+
+一次更新大致是：
+
+1. **渲染（Render）**：纯函数算出 UI 描述（可被打断、可重试）。
+2. **提交（Commit）**：把变更应用到 DOM。
+3. **Effect**：浏览器绘制后，React 运行 Effect，去对接外部世界。
+
+因此：
+
+- Effect **不是**「state 一变就立刻执行」的生命周期回调，而是「让 UI 与外部保持一致」的同步过程。
+- cleanup 会在**下一次 setup 之前**以及**卸载时**执行，用来撤销上一次同步（取消订阅、清定时器等）。
+
+可以把每个 Effect 想成独立的同步流程：**依赖描述「何时需要重新同步」**，cleanup 描述「如何停止上一次同步」。
+
+### Strict Mode 下的「双调用」
+
+开发环境开启 Strict Mode 时，React 会在首次真正 setup 前**额外跑一轮 setup → cleanup**，用来压力测试你的 cleanup 是否能正确撤销 setup。若你看到「订阅了两次」或「请求打了两遍」，优先检查 cleanup，而不是关掉 Strict Mode。详见 [Synchronizing with Effects](https://react.dev/learn/synchronizing-with-effects)。
+
+## 该用 / 不该用
+
+| 场景 | 建议 |
+| --- | --- |
+| 订阅 WebSocket、`resize`、第三方 widget | ✅ `useEffect` |
+| 从已有 props/state **派生**展示数据 | ❌ 渲染期间直接计算（贵再用 `useMemo`） |
+| 用户点击后改状态、发请求 | ❌ 事件处理函数 / Transition / Action |
+| 列表过滤、表单校验结果 | ❌ 渲染时计算，不要 `setState` 回写 |
+| 客户端拉数（现代数据方案） | 优先 Server Components、`use` + Suspense、路由 loader 等，而不是默认 `useEffect + fetch` |
+
+错误示范——用 Effect「同步」派生 state：
+
+```tsx
+// ❌ 多余的一轮渲染，也容易漏依赖
+const [filtered, setFiltered] = useState([])
+useEffect(() => {
+  setFiltered(items.filter((x) => x.active))
+}, [items])
+```
+
+正确做法：
+
+```tsx
+// ✅
+const filtered = items.filter((x) => x.active)
+```
+
+## 常见问题与解决办法
+
+### 1. 依赖数组漏项 → 陈旧闭包（stale closure）
+
+**现象**：Effect 里读到的 `props` / `state` 是旧的；或只跑一次却以为会跟着更新。
+
+**原因**：闭包捕获了某次渲染的值，而依赖数组没声明这些值，Effect 不会按最新值重新同步。
+
+**办法**：
+
+- 遵守 `eslint-plugin-react-hooks` 的 `exhaustive-deps`，**不要用 `eslint-disable` 糊弄**。
+- 若某值变化时**不应该**重新订阅，把它从「同步条件」里拆出去：把对象/函数挪进 Effect 内部，或用事件型逻辑（React 19.2 的 [`useEffectEvent`](https://react.dev/reference/react/useEffectEvent)）读取最新值而不加入依赖。
+
+```tsx
+// 好：把创建Options 放进 Effect，避免把每次新建的对象塞进依赖
+useEffect(() => {
+  const connection = createConnection({ serverUrl, roomId })
+  connection.connect()
+  return () => connection.disconnect()
+}, [serverUrl, roomId])
+```
+
+### 2. 无限循环：`setState` 在 Effect 里又触发自己
+
+**现象**：页面卡死，或网络请求刷屏。
+
+**常见原因**：
+
+- Effect 依赖了自己 `set` 出来的 state，且每次都算出「新引用」。
+- 依赖是组件内每次渲染新建的对象 / 函数。
+
+**办法**：
+
+- 问自己：这是不是其实该在事件里做？
+- 用函数式更新避免把 state 放进依赖：`setCount((c) => c + 1)`。
+- 对象依赖改为原始值依赖，或把创建移进 Effect。
+
+### 3. 异步 Effect 里组件已卸载仍 `setState`
+
+```tsx
+useEffect(() => {
+  let cancelled = false
+  fetchUser(id).then((user) => {
+    if (!cancelled) setUser(user)
+  })
+  return () => {
+    cancelled = true
+  }
+}, [id])
+```
+
+用 `AbortController` 取消 `fetch` 往往更干净。竞争条件（先发的请求后返回）同样靠「忽略过期响应」或 abort 解决。
+
+### 4. 开发环境 Effect 跑两遍，误以为是生产 bug
+
+Strict Mode 双调用是**刻意的**。生产环境不会无故多跑一轮。正确姿势是让 cleanup 对称撤销 setup；用它暴露「只 connect 不 disconnect」这类泄漏。
+
+### 5. 需要读 DOM 布局并**阻塞绘制**
+
+`useEffect` 在绘制之后跑，可能闪一下。若必须在浏览器绘制前测量/写入 DOM，改用 [`useLayoutEffect`](https://react.dev/reference/react/useLayoutEffect)。大多数情况仍应用 `useEffect`。
+
+### 6. 在条件 / 循环里调用 Hook
+
+违反 Rules of Hooks。把条件挪进 Effect 内部，或拆成子组件。
+
+```tsx
+// ❌
+if (enabled) {
+  useEffect(() => { ... }, [])
+}
+
+// ✅
+useEffect(() => {
+  if (!enabled) return
+  // ...
+}, [enabled])
+```
+
+## 实践清单
+
+1. 先问：有没有外部系统？没有就别写 Effect。
+2. 每个 Effect 只做一件同步事；cleanup 必须能撤销它。
+3. 依赖写全；对象/函数依赖优先重构掉，而不是禁用 lint。
+4. 异步务必处理取消 / 过期响应。
+5. 接受 Strict Mode 双调用，用它检验 cleanup。
+
+## 延伸阅读
+
+- [useEffect API](https://react.dev/reference/react/useEffect)
+- [Synchronizing with Effects](https://react.dev/learn/synchronizing-with-effects)
+- [You Might Not Need an Effect](https://react.dev/learn/you-might-not-need-an-effect)
+- 同系列：[`useMemo`](/blog/react/use-memo)、[`useCallback`](/blog/react/use-callback)、[`useRef`](/blog/react/use-ref)

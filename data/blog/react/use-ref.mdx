@@ -1,0 +1,200 @@
+---
+title: 'React Hook 专题：useRef'
+date: '2026-08-08'
+tags: ['react', 'hooks', 'useRef']
+draft: false
+summary: '梳理 useRef 在 DOM 引用与可变盒子两种角色中的用法与原理，并说明渲染期读写、初始化陷阱、与 state 误用等常见问题。'
+---
+
+`useRef` 返回一个在多次渲染间**身份不变**的可变对象 `{ current: ... }`。改 `current` **不会触发重新渲染**。它有两类主力用途：
+
+1. 拿住 DOM（或第三方实例）；
+2. 存放任意可变信息（定时器 id、上一次值、命令式句柄），且不需要反映到 UI。
+
+官方参考：[useRef](https://react.dev/reference/react/useRef)。
+
+## 基本用法
+
+### 访问 DOM
+
+```tsx
+import { useRef, useEffect } from 'react'
+
+function TextInput() {
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  return <input ref={inputRef} />
+}
+```
+
+### 保存可变值（不驱动 UI）
+
+```tsx
+function Stopwatch() {
+  const [time, setTime] = useState(0)
+  const intervalRef = useRef<number | null>(null)
+
+  const start = () => {
+    intervalRef.current = window.setInterval(() => {
+      setTime((t) => t + 1)
+    }, 1000)
+  }
+
+  const stop = () => {
+    if (intervalRef.current !== null) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+  }
+
+  // ...
+}
+```
+
+React 19 起，调用 `useRef` 时需要传入初始参数（可为 `null`）：`useRef(null)` / `useRef(0)`。
+
+## 原理
+
+- 返回的 ref 对象挂在 Fiber 上，**组件寿命内同一引用**。
+- 更新 `ref.current` 是普通属性赋值，**不走** React 的状态更新队列，因此：
+  - 不会触发渲染；
+  - 渲染中读到的 `current` 也不会自动「订阅」后续变化。
+- 作为 `ref` prop 交给 React 时，React 会在 commit 阶段设置 / 清空 `current`（挂载指向节点，卸载置 `null`）。回调 ref、`useImperativeHandle` 是同一套命令式通道的进阶形态。
+
+对比记忆：
+
+| | `useState` | `useRef` |
+| --- | --- | --- |
+| 改了要不要重渲染 | 要 | 不要 |
+| 适合展示到 UI 的数据 | ✅ | ❌ |
+| 适合定时器 / 上一次 props | 勉强 | ✅ |
+| 渲染期间能否写 | 按规则更新 | **不要写**（破坏纯度） |
+
+## 常见模式
+
+### 记住上一次的值
+
+```tsx
+function usePrevious<T>(value: T) {
+  const ref = useRef<T | undefined>(undefined)
+  useEffect(() => {
+    ref.current = value
+  }, [value])
+  return ref.current
+}
+```
+
+### 避免重复创建昂贵实例
+
+官方推荐的「懒初始化 ref」模式（不要用 `useMemo` 冒充只创建一次）：
+
+```tsx
+function Video() {
+  const playerRef = useRef<Player | null>(null)
+  if (playerRef.current === null) {
+    playerRef.current = new Player()
+  }
+  // ...
+}
+```
+
+注意：这是少数「渲染期间写 ref」的例外场景——仅用于**初始化一次**，且写入不应依赖会变化的 props 来决定「创建什么」（否则 Strict Mode 双渲染可能暴露问题）。更稳妥的初始化也可放在 `useState(() => new Player())` 若实例可丢弃重建。
+
+### 在事件里读最新 state（不必进依赖）
+
+有时用 ref 镜像最新值，供订阅回调读取（Effect Event 出现后，很多场景可改用 `useEffectEvent`）：
+
+```tsx
+const valueRef = useRef(value)
+useEffect(() => {
+  valueRef.current = value
+}, [value])
+```
+
+## 常见问题与解决办法
+
+### 1. 渲染期间读 / 写 `ref.current` 做分支 UI
+
+```tsx
+// ❌ 破坏纯度；并发渲染下结果不可预期
+if (ref.current > 10) {
+  return <TooBig />
+}
+ref.current += 1
+```
+
+**办法**：要驱动 UI 就用 `useState` / `useReducer`。ref 留给事件、Effect、命令式 API。
+
+### 2. 挂载瞬间 `ref.current` 还是 `null`
+
+```tsx
+function Comp() {
+  const ref = useRef<HTMLDivElement>(null)
+  console.log(ref.current) // 首次渲染一定是 null
+  return <div ref={ref} />
+}
+```
+
+DOM 在 commit 后才写入。测量尺寸、`focus` 应放在 `useEffect` / `useLayoutEffect`，或事件处理里。
+
+### 3. 条件渲染导致 ref 丢失
+
+```tsx
+{open && <Panel ref={panelRef} />}
+```
+
+关闭后 `current` 变为 `null`。访问前判空；或始终挂载并用 CSS 隐藏（按需求权衡）。
+
+### 4. 把 ref 当 state 用，改了 UI 不更新
+
+```tsx
+const countRef = useRef(0)
+const bump = () => {
+  countRef.current += 1 // UI 上的 {countRef.current} 不会变
+}
+```
+
+**办法**：需要上屏就用 state。只需在日志 / 埋点里读累计值，才用 ref。
+
+### 5. 回调 ref 与对象 ref 混用踩坑
+
+父组件若写 `ref={node => ...}` 又想转发，注意回调在更新时可能先以 `null` 调用再指向新节点——清理逻辑要写对。转发组件用 `forwardRef` / 新版 `ref` as prop，库作者场景再用 `useImperativeHandle` 收窄暴露面。
+
+### 6. TypeScript：`useRef(null)` 的类型
+
+```ts
+// DOM
+const el = useRef<HTMLDivElement>(null) // current: HTMLDivElement | null
+
+// 可变盒子，确定会赋值
+const id = useRef<number | null>(null)
+
+// 懒初始化非 null 对象时，注意泛型不要写成不可能的 null 交叉导致难用
+```
+
+避免 `useRef<HTMLDivElement>(null!)` 一类撒谎式断言，除非你保证访问点已在 commit 之后。
+
+### 7. 和 useEffect 清理不同步
+
+定时器存在 ref 里却忘记在 cleanup `clearInterval`，或 Strict Mode 双挂载导致两个 interval。
+
+**办法**：Effect 的 setup/cleanup 成对；start/stop 事件路径也要清掉旧 id。
+
+## 实践清单
+
+1. UI 数据 → state；命令式句柄 / 不触发渲染的值 → ref。
+2. 不要在渲染路径里用 `current` 做输出决策（初始化例外要非常小心）。
+3. 碰 DOM 等 commit 之后（Effect / 事件）。
+4. 可变盒子不等于全局变量：仍按组件实例隔离，卸载后勿使用。
+5. 「只创建一次」用 ref 懒初始化或 `useState` 惰性函数，而不是 `useMemo`。
+
+## 延伸阅读
+
+- [useRef API](https://react.dev/reference/react/useRef)
+- [Referencing Values with Refs](https://react.dev/learn/referencing-values-with-refs)
+- [Manipulating the DOM with Refs](https://react.dev/learn/manipulating-the-dom-with-refs)
+- 同系列：[`useEffect`](/blog/react/use-effect)、[`useMemo`](/blog/react/use-memo)、[`useCallback`](/blog/react/use-callback)

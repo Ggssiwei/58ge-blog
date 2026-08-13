@@ -1,0 +1,151 @@
+---
+title: 'React Hook 专题：useCallback'
+date: '2026-08-07'
+tags: ['react', 'hooks', 'useCallback']
+draft: false
+summary: '说明 useCallback 如何稳定函数引用、与 memo/useEffect 的配合方式，以及滥用、依赖陷阱、和 useMemo 的关系与解法。'
+---
+
+`useCallback` 用来在依赖不变时**返回同一个函数引用**。它本质上是「缓存函数」的 `useMemo` 语法糖，同样是**性能优化**，不是业务语义保证。
+
+```ts
+useCallback(fn, deps) ≈ useMemo(() => fn, deps)
+```
+
+参考：[useCallback](https://react.dev/reference/react/useCallback)、[useMemo](https://react.dev/reference/react/useMemo)。
+
+## 基本用法
+
+```tsx
+import { useCallback, useState, memo } from 'react'
+
+const Item = memo(function Item({ onSelect }: { onSelect: (id: string) => void }) {
+  // ...
+})
+
+function List({ items }: { items: ItemType[] }) {
+  const [selected, setSelected] = useState<string | null>(null)
+
+  const onSelect = useCallback((id: string) => {
+    setSelected(id)
+  }, [])
+
+  return items.map((item) => <Item key={item.id} onSelect={onSelect} />)
+}
+```
+
+没有 `useCallback` 时，父组件每次渲染都会新建 `onSelect`，即便 `Item` 包了 `memo`，也会因 props 变化而重渲染。
+
+## 原理
+
+1. 渲染时用 `Object.is` 比较依赖。
+2. 依赖未变 → 返回**上一次缓存的函数引用**（函数体闭包仍来自创建该函数的那次渲染——见下文「陈旧闭包」）。
+3. 依赖变了 → 用当前渲染的新函数替换缓存。
+
+因此：`useCallback` 稳定的是**引用**；函数内部读到的 props/state，取决于你如何写依赖与更新逻辑。
+
+## 什么时候值得用
+
+1. **把回调传给 `memo` 子组件**，且子组件重渲染成本高。
+2. **回调出现在其他 Hook 的依赖里**（如 `useEffect(..., [onChange])`），避免父级重渲染导致 Effect 无意义重跑。
+3. **自定义 Hook 对外暴露稳定 API**，减少消费方抖动。
+
+不值得用：
+
+- 传给普通 DOM：`<button onClick={() => ...} />`（浏览器不在乎引用是否变化）。
+- 子组件没有 `memo` / 本来就会因其他 props 常刷。
+- 依赖数组每次都变——等于白写。
+- 全面手写「防御性 useCallback」而不看 profiler（可读性差，收益低；有 React Compiler 时更没必要默认包）。
+
+## 与 useMemo 怎么选
+
+| 需求 | 用 |
+| --- | --- |
+| 缓存**计算结果**（数组、对象、数字） | `useMemo` |
+| 缓存**函数** | `useCallback` |
+| 缓存「工厂创建的对象且含方法」 | 通常 `useMemo(() => ({ ... }), deps)` |
+
+不要套娃炫技：`useMemo(() => () => doSomething(), deps)` 直接写成 `useCallback`。
+
+## 常见问题与解决办法
+
+### 1. 陈旧闭包：引用稳定了，值却是旧的
+
+```tsx
+const [count, setCount] = useState(0)
+
+// ❌ deps 为 []，onClick 永远看到 count === 0
+const onClick = useCallback(() => {
+  console.log(count)
+  setCount(count + 1)
+}, [])
+```
+
+**办法**：
+
+- 把会变的值加入依赖：`[count]`（引用会随 count 变——这是正确的权衡）。
+- 或用函数式更新，不再闭合旧 state：
+
+```tsx
+const onClick = useCallback(() => {
+  setCount((c) => c + 1)
+}, [])
+```
+
+- Effect 里「要最新值、但不想重启订阅」时，优先考虑 [`useEffectEvent`](https://react.dev/reference/react/useEffectEvent)，而不是强行 `[]` + 读过期闭包。
+
+### 2. 依赖里塞了每次新建的对象
+
+```tsx
+const options = { debounce: 300 } // 每次新引用
+const fetchData = useCallback(() => api.load(options), [options]) // 形同虚设
+```
+
+**办法**：依赖原始值 `debounce`，或把 `options` 提到模块作用域 / `useMemo`。
+
+### 3. 以为 useCallback 能减少「自己的」计算量
+
+`useCallback` **不跳过函数体内的逻辑**；它只避免「新建函数」和由此引发的子树更新。函数被调用时，照样执行全部逻辑。
+
+贵的是计算过程 → 用 `useMemo` 或把重活移出渲染路径；不是给事件处理再套一层空 `useCallback`。
+
+### 4. 和 useEffect 互相「打补丁」
+
+父组件用 `useCallback` 稳定 `onMessage`，子组件 `useEffect(() => subscribe(onMessage), [onMessage])`——这是合理模式。
+
+但若 `onMessage` 依赖一大串 state，引用仍频繁变，Effect 照样狂跑。此时应：
+
+- 收窄依赖；
+- 把订阅参数拆成稳定的 id + Effect Event 读最新回调；
+- 或重新考虑数据流（谁拥有订阅）。
+
+### 5. 在列表里给每一项 useCallback
+
+Hook 不能放在循环里。为每行绑定参数时：
+
+```tsx
+// ✅ 行组件自己处理，或
+<button onClick={() => onSelect(item.id)} />
+
+// 若必须稳定：让 Item 接收 id + 稳定的 onSelect(id)
+```
+
+### 6. 过度 memo 导致代码噪音
+
+团队规范若要求「所有回调必须 useCallback」，往往会制造错误依赖与虚假安全感。
+
+**办法**：以测量为准；约定「跨 `memo` 边界 / 进 Effect 依赖」才使用；Compiler 项目减少手写。
+
+## 实践清单
+
+1. 先确认消费者是否在乎引用相等（`memo`、Effect 依赖、依赖比较的上下文）。
+2. 写全依赖；用函数式更新减少不必要的 deps。
+3. 不要用它修复「本不该放进依赖的内联对象」——应重构数据形状。
+4. 记住：稳定引用 ≠ 最新闭包值。
+5. 与 `useMemo` 职责分清；能不用就不用。
+
+## 延伸阅读
+
+- [useCallback API](https://react.dev/reference/react/useCallback)
+- [Skipping re-rendering with memo](https://react.dev/reference/react/memo)
+- 同系列：[`useEffect`](/blog/react/use-effect)、[`useMemo`](/blog/react/use-memo)、[`useRef`](/blog/react/use-ref)

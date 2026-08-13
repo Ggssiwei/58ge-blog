@@ -1,0 +1,168 @@
+---
+title: 'React Hook 专题：useMemo'
+date: '2026-08-06'
+tags: ['react', 'hooks', 'useMemo']
+draft: false
+summary: '讲清 useMemo 的缓存语义与适用场景，区分「性能优化」和「语义保证」，并覆盖依赖错误、过度memo、缓存被丢弃等常见问题。'
+---
+
+`useMemo` 在依赖不变时**跳过昂贵计算**，复用上一次的结果。它是**性能优化手段**，不是「这个值绝对不变」的语义承诺——React 在特定情况下可以丢弃缓存（见 [官方说明](https://react.dev/reference/react/useMemo)）。
+
+若项目启用了 [React Compiler](https://react.dev/learn/react-compiler)，多数手动 `useMemo` 可交给编译器；没有 profiler 证据时，不必默认包一层。
+
+## 基本用法
+
+```tsx
+import { useMemo } from 'react'
+
+function ProductList({ products, filterText }: Props) {
+  const visible = useMemo(() => {
+    return products.filter((p) => p.name.includes(filterText))
+  }, [products, filterText])
+
+  return visible.map((p) => <Row key={p.id} product={p} />)
+}
+```
+
+签名：
+
+```ts
+const cached = useMemo(() => compute(), dependencies)
+```
+
+- 首次渲染会执行 `compute` 并缓存返回值。
+- 之后仅当依赖中某一项 `Object.is` 比较发生变化时，才重新计算。
+
+## 原理
+
+渲染阶段：
+
+1. React 比对依赖数组与上次存储的依赖。
+2. **全相等** → 直接返回缓存值，不跑 `compute`。
+3. **有变化** → 执行 `compute`，写入新缓存。
+
+注意：
+
+- `compute` 应是**纯函数**（同样输入 → 同样输出，无副作用）。副作用应放在事件或 `useEffect` 里。
+- 缓存存在 Fiber 上，与这次组件实例绑定；卸载后消失。
+- 开发热更新、初始 mount 时 suspend 等场景下，React **可能丢掉缓存**再算一遍。因此：**不要把「只算一次」的业务语义押在 `useMemo` 上**；那种需求更适合 `useState` 惰性初始化或 `useRef`。
+
+## 什么时候值得用
+
+官方常见动机：
+
+1. **计算明显很贵**（大列表 filter/sort、复杂可视化数据），且 profiler 证明卡顿。
+2. **稳定引用**，以便子组件被 [`memo`](https://react.dev/reference/react/memo) 包住后能跳过重渲染。
+3. **作为其他 Hook 的依赖**（另一个 `useMemo` / `useEffect`），避免每次渲染新建对象导致下游无效刷新。
+
+不值得用的情况：
+
+- 简单算术、短数组 map、字符串拼接——memo 自身的比较成本可能更高。
+- 「以后可能会慢」的过早优化。
+- 用 `useMemo` 伪装「派生 state」却在里面 `setState`（错误模型）。
+
+```tsx
+// ❌ 几乎总是不需要
+const fullName = useMemo(() => `${first} ${last}`, [first, last])
+
+// ✅
+const fullName = `${first} ${last}`
+```
+
+## 与「渲染时直接算」的关系
+
+派生数据的第一选择永远是**渲染期间计算**。只有测量后确认昂贵，再加 `useMemo`：
+
+```tsx
+// 默认
+const sorted = [...items].sort(compare)
+
+// 确认昂贵后再包
+const sorted = useMemo(() => [...items].sort(compare), [items])
+```
+
+## 常见问题与解决办法
+
+### 1. 依赖写错：该更新时不更新 / 不该更新时狂算
+
+**漏依赖**：缓存了过期结果（和 `useEffect` 的陈旧闭包同类问题）。
+
+**多余依赖**：每次渲染都变的对象/函数写进数组 → `useMemo` 形同虚设。
+
+**办法**：用 `exhaustive-deps`；把「每次新建的 options 对象」改为依赖原始字段，或在更外层稳定引用。
+
+```tsx
+// ❌ filter 每次都是新函数 → memo 永远失效
+useMemo(() => items.filter(filter), [items, filter])
+
+// ✅ 依赖原始条件
+useMemo(() => items.filter((x) => x.type === type), [items, type])
+```
+
+### 2. 把 `useMemo` 当成「只执行一次」
+
+```tsx
+// ❌ 语义错误：React 可以丢弃缓存
+const id = useMemo(() => crypto.randomUUID(), [])
+```
+
+**办法**：
+
+```tsx
+const [id] = useState(() => crypto.randomUUID())
+// 或
+const idRef = useRef(null)
+if (idRef.current === null) idRef.current = crypto.randomUUID()
+```
+
+### 3. 在 `useMemo` 里做订阅 / 请求
+
+计算属性被缓存跳过时，副作用不会跑；依赖变化时又可能重复订阅。这是错误分层。
+
+**办法**：副作用 → `useEffect`；纯计算 → `useMemo` / 直接算。
+
+### 4. 为了 memo 子组件而 memo 一切 props
+
+父组件里一堆 `useMemo`，可读性变差，收益却接近零。
+
+**办法**：
+
+- 先确认子组件是否真用了 `memo`，以及重渲染是否可测。
+- 能把 state 下移、内容拆分就不传大对象。
+- 有 React Compiler 时，优先让编译器处理。
+
+### 5. 返回值仍是「内部新引用」
+
+```tsx
+// 外层 memo 住了，但每次仍返回新对象字面量……等一下，这是 compute 的结果
+const style = useMemo(() => ({ color }), [color]) // ✅ 依赖不变则引用不变
+
+const style = useMemo(() => ({ color, nested: { a: 1 } }), [color])
+// nested 每次重算都是新的——但整体 style 在 color 不变时仍是同一引用 ✅
+```
+
+真正的问题是：**没有 useMemo 时**把内联对象传给 `memo` 子组件：
+
+```tsx
+<Chart style={{ color }} /> // 每次新对象 → memo 失效
+```
+
+此时才需要 `useMemo`（或把 `style` 变成原始值 prop）。
+
+### 6. 依赖数组「省略」或传错类型
+
+必须传数组。忘记传依赖等于「每次都重算」，还容易误导读者以为已缓存。
+
+## 实践清单
+
+1. 默认：渲染时直接算。
+2. Profiler 证明瓶颈，或要稳定引用给 `memo` / 下游 Hook 时，再加 `useMemo`。
+3. `compute` 保持纯净；不做 I/O。
+4. 不依赖「缓存永不失效」的语义。
+5. 有 Compiler 时，少写手动 memo。
+
+## 延伸阅读
+
+- [useMemo API](https://react.dev/reference/react/useMemo)
+- [You Might Not Need an Effect](https://react.dev/learn/you-might-not-need-an-effect)（派生数据部分）
+- 同系列：[`useEffect`](/blog/react/use-effect)、[`useCallback`](/blog/react/use-callback)、[`useRef`](/blog/react/use-ref)
