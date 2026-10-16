@@ -1,0 +1,82 @@
+---
+title: '设计模式（四）之观察者模式'
+date: '2026-10-19'
+tags: ['设计模式', 'typescript', 'observer']
+draft: false
+summary: '主题在状态变化时通知已注册的观察者。用一段 TypeScript 事件总线说明订阅、退订，以及泄漏与通知顺序。'
+---
+
+观察者模式（Observer）让对象之间保持松耦合的一对多通知：主题（Subject）维护观察者列表，自身变化时逐个调用它们。观察者不需要知道还有谁在听，主题也不需要知道每个监听者的具体类型。
+
+浏览器的 `EventTarget`、Node 的 `EventEmitter`，以及前端状态库里的订阅 API，都是这个模式。
+
+## 结构
+
+- **主题**：提供 `subscribe` / `unsubscribe`，在变化时 `notify`。
+- **观察者**：一个回调，或实现统一的 `update` 方法。
+
+## 示例：最小事件总线
+
+```ts
+type Listener<T> = (payload: T) => void
+
+class Emitter<T> {
+  private listeners = new Set<Listener<T>>()
+
+  subscribe(listener: Listener<T>) {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  emit(payload: T) {
+    for (const listener of this.listeners) {
+      listener(payload)
+    }
+  }
+}
+
+interface CartEvent {
+  sku: string
+  qty: number
+}
+
+const cart = new Emitter<CartEvent>()
+
+const unsubscribe = cart.subscribe((event) => {
+  console.log(`cart +${event.qty} ${event.sku}`)
+})
+
+cart.emit({ sku: 'book', qty: 1 })
+unsubscribe()
+cart.emit({ sku: 'book', qty: 1 }) // 不再打印
+```
+
+`subscribe` 返回退订函数，调用方不用记住主题内部的列表结构。用 `Set` 可以避免同一个函数被注册两次。
+
+如果通知时还要带上「谁发出的」，把主题自己传进回调即可：
+
+```ts
+type Update<T> = (subject: Emitter<T>, payload: T) => void
+```
+
+## 现实场景
+
+- **DOM 事件**：按钮是主题，多个监听函数是观察者。点击时浏览器逐个调用，按钮不需要知道监听者是校验还是埋点。
+- **界面与数据分开更新**：购物车数量变化后，角标、结算栏、推荐位各自订阅，互不引用。
+- **实时行情**：价格服务每秒推一次，K 线、最新价、预警规则分别订阅同一条流。
+- **前端状态库**：Redux 的 `store.subscribe`、Vue 的响应式依赖收集，都是「状态变了就通知订阅者」。
+
+## 什么时候用
+
+- 一个状态变化要驱动多块互不依赖的逻辑（界面、日志、分析）。
+- 发布方不应该依赖具体订阅方，否则会形成循环依赖。
+- 订阅关系会在运行时增减。
+
+## 注意
+
+- 订阅后必须退订。组件卸载、连接关闭时如果忘了调用返回的函数，闭包会一直引用旧对象。
+- 不要在 `emit` 遍历过程中直接改同一个 `Set` 的成员后再假设顺序稳定。需要的话，先把监听器复制成数组再通知。
+- 某个监听器抛错会打断后续通知。若订阅者互不信任，应在循环里单独 `try/catch`。
+- 观察者只应响应通知。如果它反过来指挥主题的内部状态，耦合会从「松」变回「紧」。
+
+同系列：[装饰器模式](/blog/design-patterns/decorator)、[适配器模式](/blog/design-patterns/adapter)、[工厂模式](/blog/design-patterns/factory)、[单例模式](/blog/design-patterns/singleton)。

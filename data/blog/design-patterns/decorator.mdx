@@ -1,0 +1,91 @@
+---
+title: '设计模式（一）之装饰器模式'
+date: '2026-10-16'
+tags: ['设计模式', 'typescript', 'decorator']
+draft: false
+summary: '用组合而不是继承给对象动态叠加行为。以 TypeScript 包装数据源为例，说明装饰器模式的结构、用法和注意点。'
+---
+
+装饰器模式（Decorator）在不改原类的前提下，把额外职责一层层包到对象外面。每一层都实现同一个接口，调用时先做自己的事，再转发给内层。
+
+它解决的是「功能组合爆炸」：如果用继承表达「带日志」「带缓存」「带重试」的所有排列，子类会迅速膨胀。装饰器让这些能力可以按需叠加。
+
+## 结构
+
+- **组件接口**：被装饰对象和装饰器共用的契约。
+- **具体组件**：原始实现。
+- **装饰器**：持有一个组件，转发调用，并在前后插入行为。
+
+## 示例：给数据源叠缓存和日志
+
+```ts
+interface DataSource {
+  read(key: string): string | undefined
+}
+
+class MemorySource implements DataSource {
+  constructor(private store: Record<string, string>) {}
+
+  read(key: string) {
+    return this.store[key]
+  }
+}
+
+class DataSourceDecorator implements DataSource {
+  constructor(protected inner: DataSource) {}
+
+  read(key: string) {
+    return this.inner.read(key)
+  }
+}
+
+class LoggingSource extends DataSourceDecorator {
+  read(key: string) {
+    console.log(`read ${key}`)
+    return super.read(key)
+  }
+}
+
+class CachingSource extends DataSourceDecorator {
+  private cache = new Map<string, string | undefined>()
+
+  read(key: string) {
+    if (this.cache.has(key)) return this.cache.get(key)
+    const value = super.read(key)
+    this.cache.set(key, value)
+    return value
+  }
+}
+
+const source = new CachingSource(
+  new LoggingSource(new MemorySource({ name: '58Ge' }))
+)
+
+source.read('name') // 打日志，并写入缓存
+source.read('name') // 命中缓存，不再打日志
+```
+
+外层先执行。这里缓存包在日志外面，第二次读取不会再进入 `LoggingSource`。把顺序对调，日志就会每次都打印。
+
+## 现实场景
+
+- **Java I/O**：`BufferedReader` 包住 `FileReader`，缓冲是后加的能力，读文件的接口不变。
+- **HTTP 客户端**：给 `fetch` 依次套上重试、超时、打日志。业务代码仍只调用 `get(url)`。
+- **Node 中间件**：Express、Koa 的中间件栈就是一层层装饰请求处理函数，鉴权、压缩、错误捕获可以单独开关。
+- **前端请求库**：Axios 拦截器在发出请求前加 token、在响应后统一拆包，不改每个接口函数。
+
+## 什么时候用
+
+- 需要在运行时组合功能，而不是在编译期定死继承树。
+- 多个横切关注点（日志、缓存、鉴权、重试）要独立开关。
+- 你不能或不想修改已有类。
+
+TypeScript 的实验性装饰器语法（`@logged`）是另一套语言特性，用来标注类和成员。本文说的是对象组合意义上的装饰器模式，两者名字相同，机制不同。
+
+## 注意
+
+- 层数太多时，调用栈变深，排查要顺着包装顺序看。
+- 装饰器和被包装对象应遵守同一接口，避免调用方感知具体层。
+- 若只有一处固定增强，直接写一个函数包装往往更简单，不必上类层次。
+
+同系列：[适配器模式](/blog/design-patterns/adapter)、[工厂模式](/blog/design-patterns/factory)、[观察者模式](/blog/design-patterns/observer)、[单例模式](/blog/design-patterns/singleton)。

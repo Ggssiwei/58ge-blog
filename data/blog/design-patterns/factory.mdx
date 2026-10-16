@@ -1,0 +1,113 @@
+---
+title: '设计模式（三）之工厂模式'
+date: '2026-10-18'
+tags: ['设计模式', 'typescript', 'factory']
+draft: false
+summary: '把对象创建从使用处抽走。用 TypeScript 的简单工厂和工厂方法，说明何时封装 new，以及和构造函数重载的差别。'
+---
+
+工厂模式（Factory）把「创建哪一种对象」集中到一个地方。调用方只拿产品接口，不写 `new` 的分支。创建规则变化时，改工厂即可，使用处保持不动。
+
+常见有两档：
+
+- **简单工厂**：一个函数或类，用参数决定具体产品。
+- **工厂方法**：每种产品有自己的创建器，创建器继承同一抽象。
+
+## 示例：按类型创建通知
+
+产品先统一接口：
+
+```ts
+interface Notice {
+  render(): string
+}
+
+class InfoNotice implements Notice {
+  constructor(private text: string) {}
+  render() {
+    return `[info] ${this.text}`
+  }
+}
+
+class WarnNotice implements Notice {
+  constructor(private text: string) {}
+  render() {
+    return `[warn] ${this.text}`
+  }
+}
+```
+
+简单工厂用一个函数就够：
+
+```ts
+type NoticeKind = 'info' | 'warn'
+
+function createNotice(kind: NoticeKind, text: string): Notice {
+  switch (kind) {
+    case 'info':
+      return new InfoNotice(text)
+    case 'warn':
+      return new WarnNotice(text)
+  }
+}
+
+const notice = createNotice('warn', '磁盘空间不足')
+notice.render() // [warn] 磁盘空间不足
+```
+
+当创建过程本身也不同（读配置、校验、组装依赖）时，再用工厂方法把创建器分开：
+
+```ts
+interface NoticeFactory {
+  create(text: string): Notice
+}
+
+class InfoNoticeFactory implements NoticeFactory {
+  create(text: string) {
+    return new InfoNotice(text.trim())
+  }
+}
+
+class WarnNoticeFactory implements NoticeFactory {
+  create(text: string) {
+    return new WarnNotice(text.trim().toUpperCase())
+  }
+}
+```
+
+调用方依赖 `NoticeFactory`，测试时换一个返回假通知的工厂即可。
+
+## 现实场景
+
+- **跨云存储**：业务只调用 `Storage.put(key, body)`。工厂按配置创建 S3、OSS 或本地磁盘实现，切换厂商不改上传代码。
+- **按文件类型解析**：上传 `.csv`、`.xlsx`、`.json` 时，工厂按扩展名返回对应解析器，接口统一是 `parse(buffer)`。
+- **UI 组件库**：设计系统用 `createButton('primary' | 'ghost')` 决定样式和默认属性，页面不再自己拼 class。
+- **测试夹具**：测试里换一个工厂，固定返回内存假对象，避免连真实数据库或支付网关。
+
+## 什么时候用
+
+- `new` 前面已经出现按类型分支，而且散落在多处。
+- 具体类来自第三方或会替换，调用方只应看到接口。
+- 创建步骤不止一行：读环境变量、选择实现、注入依赖。
+
+如果全项目只有一处 `new InfoNotice(text)`，直接构造更清楚。
+
+## 注意
+
+- 简单工厂的 `switch` 仍是集中修改点。类型会频繁增加时，可改成注册表：
+
+```ts
+const registry: Record<NoticeKind, new (text: string) => Notice> = {
+  info: InfoNotice,
+  warn: WarnNotice,
+}
+
+function createNotice(kind: NoticeKind, text: string): Notice {
+  return new registry[kind](text)
+}
+```
+
+- 工厂返回的应是接口，而不是把具体类类型泄露给所有调用方。
+- 不要为了「每个类配一个工厂」而机械套用。创建没有变化点时，工厂只是多一层跳转。
+
+同系列：[装饰器模式](/blog/design-patterns/decorator)、[适配器模式](/blog/design-patterns/adapter)、[观察者模式](/blog/design-patterns/observer)、[单例模式](/blog/design-patterns/singleton)。

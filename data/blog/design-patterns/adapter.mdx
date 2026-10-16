@@ -1,0 +1,71 @@
+---
+title: '设计模式（二）之适配器模式'
+date: '2026-10-17'
+tags: ['设计模式', 'typescript', 'adapter']
+draft: false
+summary: '把已有接口转换成调用方期望的接口。用 TypeScript 包装第三方支付 SDK，说明适配器与装饰器的差别，并给出常见落地场景。'
+---
+
+适配器模式（Adapter）让原本对不上的两边能够协作。被适配的类已经存在，你不能或不该改它。适配器实现调用方要的接口，内部把调用翻译成旧接口。
+
+它不增加新行为，只做接口转换。这是它和[装饰器模式](/blog/design-patterns/decorator)的差别：装饰器在同一接口上叠加能力，适配器把一种接口变成另一种。
+
+## 结构
+
+- **目标接口**：当前代码希望使用的形状。
+- **被适配者**：已有的类或第三方 SDK，接口不同。
+- **适配器**：实现目标接口，持有被适配者并转发。
+
+## 示例：把旧支付 SDK 收成统一结账接口
+
+业务只认 `Checkout`。旧 SDK 用的是另一套方法名和金额单位（分，而不是元）：
+
+```ts
+interface Checkout {
+  pay(amountYuan: number): Promise<string>
+}
+
+class LegacyPaySdk {
+  chargeInCents(cents: number) {
+    return Promise.resolve(`legacy-${cents}`)
+  }
+}
+
+class LegacyPayAdapter implements Checkout {
+  constructor(private sdk: LegacyPaySdk) {}
+
+  pay(amountYuan: number) {
+    const cents = Math.round(amountYuan * 100)
+    return this.sdk.chargeInCents(cents)
+  }
+}
+
+async function placeOrder(checkout: Checkout) {
+  return checkout.pay(19.9)
+}
+
+placeOrder(new LegacyPayAdapter(new LegacyPaySdk()))
+```
+
+以后接入新支付，只要再写一个 `implements Checkout` 的适配器。下单函数不用改。
+
+## 现实场景
+
+- **第三方地图**：页面只调用 `moveTo(lng, lat)` 和 `addMarker`。高德、Google 的 SDK 方法名不同，各自一个适配器，换地图供应商不改页面。
+- **旧系统对接**：库存服务仍返回 `{ goods_id, qty }`，新模块要 `{ sku, quantity }`。适配器做字段改名和类型转换，避免把旧字段扩散到新代码。
+- **数据形态转换**：`NodeList`、`arguments` 这类类数组，用 `Array.from` 适配成真正的数组后再用 `map`。标准库已经把这个转换做成了函数。
+- **硬件或协议差异**：串口温湿度计给出字节帧，业务要 `{ celsius, humidity }`。解析和单位换算放在适配器里，上层只消费领域对象。
+
+## 什么时候用
+
+- 要复用的类接口和当前代码不一致，而且不能改那一类。
+- 同时对接多个外部系统，希望对内只保留一个接口。
+- 迁移期新旧接口并存，需要一层翻译，而不是大范围改调用点。
+
+## 注意
+
+- 适配器应变薄：做参数、单位、字段映射。业务规则变复杂时，应回到领域服务，而不是继续堆在适配器里。
+- 不要为了「统一」把差异很大的操作硬塞进同一个方法。对不上的能力就不要假装适配成功。
+- 若你拥有两边的代码，直接改接口通常比永久留一层适配器更清楚。适配器适合边界，不适合内部到处转发。
+
+同系列：[装饰器模式](/blog/design-patterns/decorator)、[工厂模式](/blog/design-patterns/factory)、[观察者模式](/blog/design-patterns/observer)、[单例模式](/blog/design-patterns/singleton)。

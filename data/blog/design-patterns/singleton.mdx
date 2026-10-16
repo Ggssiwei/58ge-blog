@@ -1,0 +1,91 @@
+---
+title: '设计模式（五）之单例模式'
+date: '2026-10-20'
+tags: ['设计模式', 'typescript', 'singleton']
+draft: false
+summary: '保证一个类在进程里只有一个实例。对比 TypeScript 类单例和 ES 模块单例，并说明测试与多实例边界。'
+---
+
+单例模式（Singleton）限制某个类只能有一个实例，并提供一个全局访问点。适合进程内真正唯一的资源：配置读取器、连接池入口、应用级日志器。
+
+它不适合「这个页面上刚好只有一个」。那是当前数据，不是类型约束。
+
+## 类单例
+
+把构造函数收起来，只通过 `getInstance` 取对象：
+
+```ts
+class AppConfig {
+  private static instance: AppConfig | undefined
+  readonly apiBase: string
+
+  private constructor(apiBase: string) {
+    this.apiBase = apiBase
+  }
+
+  static getInstance() {
+    if (!AppConfig.instance) {
+      const apiBase = process.env.API_BASE ?? 'https://example.com'
+      AppConfig.instance = new AppConfig(apiBase)
+    }
+    return AppConfig.instance
+  }
+}
+
+const a = AppConfig.getInstance()
+const b = AppConfig.getInstance()
+a === b // true
+```
+
+`private constructor` 阻止外部 `new AppConfig()`。第一次调用创建实例，之后都返回同一引用。
+
+## 模块单例
+
+在 TypeScript / ES Module 里，模块本身只求值一次。多数场景直接导出实例更简单：
+
+```ts
+class Logger {
+  info(message: string) {
+    console.log(message)
+  }
+}
+
+export const logger = new Logger()
+```
+
+任何文件 `import { logger }` 拿到的都是同一个对象，不必再写 `getInstance`。类单例主要用在必须从类上取实例、或实例化时机要延迟到第一次调用时。
+
+## 现实场景
+
+- **应用日志**：全站共用一个 logger，统一级别、输出位置和请求 ID，而不是每个模块 `new Logger()`。
+- **数据库连接池**：进程里只建一个池，请求从池里借连接。每个请求再新建池会耗尽数据库连接数。
+- **浏览器平台对象**：`window`、`document`、`localStorage` 在一个页面里本来就只有一份，业务代码直接使用这份唯一实例。
+- **功能开关配置**：启动时读一次远程配置并缓存在单例里，后续请求复用，避免每次打配置中心。
+
+## 什么时候用
+
+- 重复创建会出错或很贵：数据库连接池、硬件句柄、进程级缓存。
+- 调用链很深，逐层传递这一个依赖会让函数签名全是同一个参数。
+
+如果只是怕「忘记传递依赖」，优先考虑在组合根创建一次，再显式注入。那样测试可以换实现，生产路径也仍然只有一个实例。
+
+## 注意
+
+- 单例是隐式全局状态。测试之间会互相污染，需要提供重置口，或改成注入：
+
+```ts
+class AppConfig {
+  private static instance: AppConfig | undefined
+
+  static resetForTest() {
+    AppConfig.instance = undefined
+  }
+}
+```
+
+这个方法只应出现在测试里。
+
+- 懒加载单例若在并发任务里第一次被同时调用，可能创建出两份。浏览器主线程通常不必担心；Worker 或多实例 Node 集群里，每个线程 / 进程仍各有一份，它不是跨进程唯一。
+- 不要把用户会话、当前购物车做成单例。它们按请求或按用户存在，全局一份会串数据。
+
+同系列：[装饰器模式](/blog/design-patterns/decorator)、[适配器模式](/blog/design-patterns/adapter)、[工厂模式](/blog/design-patterns/factory)、[观察者模式](/blog/design-patterns/observer)。
