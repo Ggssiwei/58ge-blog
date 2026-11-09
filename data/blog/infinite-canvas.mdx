@@ -1,0 +1,235 @@
+---
+title: '实现无限画布'
+date: '2026-11-09'
+tags: ['canvas', 'web', 'javascript']
+draft: false
+summary: '无限画布是视口上的一台相机：世界坐标无界，屏幕只是平移和缩放后的窗口。本文给出可交互示例，并比较 DOM 变换、Canvas 2D、视口裁剪和 WebGL 四条实现路线。'
+---
+
+无限画布是架在无界世界坐标上的一台相机。视口就那么大，物体的位置记在世界坐标里，屏幕上的像素是相机平移、缩放之后裁出来的一块。把容器宽高设成很大，只是在世界坐标上盖了一张有边界的纸，拖到纸边就穿帮了。
+
+Figma、Excalidraw、tldraw、Miro 填像素的方式不一样，这台相机是同一套。
+
+## 世界坐标和屏幕坐标
+
+示例里相机是三个数：
+
+```ts
+type Camera = { x: number; y: number; zoom: number }
+```
+
+`x`、`y` 是**视口中心**对准的世界坐标，`zoom` 是世界单位到屏幕像素的倍率。`zoom = 1` 时，世界里的 1 等于屏幕上的 1px；`zoom = 2` 时放大一倍。
+
+`screenX`、`screenY` 从视口左上角算起，`width`、`height` 是视口的 CSS 像素：
+
+```ts
+screenX = (worldX - camera.x) * camera.zoom + width / 2
+screenY = (worldY - camera.y) * camera.zoom + height / 2
+
+worldX = (screenX - width / 2) / camera.zoom + camera.x
+worldY = (screenY - height / 2) / camera.zoom + camera.y
+```
+
+平移时，指针在屏幕上移动了 `(dx, dy)` 像素。相机走相反方向，并把像素换算回世界单位：
+
+```ts
+function panBy(camera: Camera, dx: number, dy: number): Camera {
+  return {
+    ...camera,
+    x: camera.x - dx / camera.zoom,
+    y: camera.y - dy / camera.zoom,
+  }
+}
+```
+
+放大之后如果不除以 `zoom`，同样的手势会把画面甩得很远。
+
+缩放要钉住光标下的世界点。先用旧相机会算出光标对应的世界坐标，换上新的 `zoom` 之后反解相机，让这个世界点仍落在同一个屏幕位置：
+
+```ts
+const MIN_ZOOM = 0.2
+const MAX_ZOOM = 3
+
+function zoomAt(
+  camera: Camera,
+  screenX: number,
+  screenY: number,
+  width: number,
+  height: number,
+  nextZoom: number
+): Camera {
+  const worldX = (screenX - width / 2) / camera.zoom + camera.x
+  const worldY = (screenY - height / 2) / camera.zoom + camera.y
+  const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom))
+  return {
+    zoom,
+    x: worldX - (screenX - width / 2) / zoom,
+    y: worldY - (screenY - height / 2) / zoom,
+  }
+}
+```
+
+用中心当锚点，是为了初始相机 `{ x: 0, y: 0, zoom: 1 }` 时，世界原点就在画面中央，第一帧不用先量视口尺寸。把 `x/y` 定义成视口左上角对应的世界坐标同样成立，屏幕公式里去掉 `width / 2` 即可。选定一种，命中测试、网格、DOM 变换都跟着用，不要混。
+
+## 在页面里试一下
+
+下面这块画布就是按上面的公式做的。网格和坐标读数在屏幕空间，便签在世界空间。
+
+<InfiniteCanvasDemo />
+
+可以这样试：
+
+- 拖空白处平移，看左上角的相机坐标：往右拖，`x` 变小。内容跟着指针走，等于相机在往世界的反方向看。
+- 对准便签上的某个字滚动滚轮（触控板用捏合）。那个字留在光标下面，周围的内容被推开。
+- 双击空白处添加便签，拖彩色标题栏移动它。便签的位置是世界坐标；拖的时候改的是这个坐标，缩放只改变你看它的倍率。
+- 点一下画布后，方向键平移，`+` / `-` 缩放，`0` 回到原点。底部的按钮做同样的事。
+
+一直往旁边拖不会碰到边。没有边，只是相机的数字在变大。
+
+## 路线一：DOM 世界层
+
+示例走的是这条路。视口 `overflow: hidden`，里面放一个世界层，便签是世界层里绝对定位的元素：
+
+```tsx
+<div className="viewport relative overflow-hidden">
+  <div
+    className="absolute top-1/2 left-1/2"
+    style={{
+      transform: `translate(${-camera.x * zoom}px, ${-camera.y * zoom}px) scale(${zoom})`,
+      transformOrigin: '0 0',
+    }}
+  >
+    {notes.map((note) => (
+      <article key={note.id} style={{ position: 'absolute', left: note.x, top: note.y }} />
+    ))}
+  </div>
+</div>
+```
+
+`left/top: 50%` 先把世界层的原点放在视口中心。CSS 变换从右往左应用：先绕 `transform-origin: 0 0` 缩放，再平移。这一步平移发生在屏幕像素里，所以要乘上 `zoom`。
+
+写成 `scale(zoom) translate(-camera.x, -camera.y)` 时，平移在缩放之前，单位是世界坐标，这时不要再乘 `zoom`。`transform-origin` 离开 `0 0`，公式对了画面仍会偏一块。
+
+网格不放进世界层。放进去的话线宽会跟着缩放，而且得准备一块足够大的元素。示例把网格画在视口上：`background-size` 等于「世界步长 × zoom」，`background-position` 对齐世界原点，线宽始终是 1px。缩得太远时，按 1-2-5 把步长放大，避免细线挤成一片灰：
+
+```ts
+function gridStep(zoom: number) {
+  const raw = 56 / zoom
+  const base = 10 ** Math.floor(Math.log10(raw))
+  const fraction = raw / base
+  const nice = fraction < 1.5 ? 1 : fraction < 3.5 ? 2 : fraction < 7.5 ? 5 : 10
+  return nice * base
+}
+```
+
+粗线每 5 个细格画一条，并且和细格对齐到同一个世界原点。粉色十字是世界坐标的 x = 0 和 y = 0，它跟网格一样画在屏幕空间，所以线宽不随缩放变化。
+
+这条路的好处是浏览器白送的：文本输入、选区、输入法、无障碍、命中测试都在。tldraw 的默认渲染就是 React 组件加一层 CSS 相机；视频和 iframe 放进世界层，和放进普通页面一样。代价也直接：每个物体是一个 DOM 节点。几十到几百个便签很舒服，上千个复杂节点时，平移每帧都在动一大棵子树，主线程会顶不住。
+
+## 路线二：Canvas 2D 的同一台相机
+
+物体多、形状简单时，换成一张位图。相机公式不变，写进 2D 变换矩阵。高分屏要把 `devicePixelRatio` 乘进矩阵，否则会糊。改 `canvas.width` 会清空位图并重置变换，所以只在尺寸变化时设置，不要放进每一帧：
+
+```js
+function draw(ctx, camera, cssWidth, cssHeight, dpr) {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.clearRect(0, 0, cssWidth, cssHeight)
+
+  const { x, y, zoom } = camera
+  ctx.setTransform(
+    zoom * dpr,
+    0,
+    0,
+    zoom * dpr,
+    (cssWidth / 2 - x * zoom) * dpr,
+    (cssHeight / 2 - y * zoom) * dpr
+  )
+
+  for (const shape of shapes) drawShape(ctx, shape)
+}
+```
+
+`clearRect` 会吃当前变换，所以先用只含 `dpr` 的矩阵把视口清掉，再切到相机。之后 `drawShape` 直接用世界坐标。矩阵最后两列是世界原点的屏幕位置，和上一节 CSS 里「先放到视口中心，再按相机平移」是同一个数。
+
+位图上没有 DOM 事件。把光标换回世界坐标，再和图形做几何判断：
+
+```js
+function pointerToWorld(clientX, clientY, rect, camera) {
+  const screenX = clientX - rect.left
+  const screenY = clientY - rect.top
+  return {
+    x: (screenX - rect.width / 2) / camera.zoom + camera.x,
+    y: (screenY - rect.height / 2) / camera.zoom + camera.y,
+  }
+}
+```
+
+从上往下找第一个包含该点的图形，就是命中结果。拖拽时改的仍是图形的世界坐标，下一帧重画即可。
+
+Excalidraw 走的就是 Canvas 2D：场景记在世界坐标里，每帧设置变换之后重画。`fillText` 能把字画上去，插入光标、选区、输入法得自己做。常见的妥协是平时画在 canvas 上，编辑时在同一个屏幕位置叠一个真实输入框，结束再把文字画回去。
+
+Canvas 2D 的舒适区大约是几千个简单图元。再往上，每帧全量重放绘图调用会成为瓶颈，这时才值得上 GPU。
+
+## 路线三：世界很大，但只挂载看得到的
+
+DOM 路线先扛不住，往往是因为视口外的节点也在参与样式和命中。数据仍保存全部物体的世界坐标，DOM 只是视口里那一截的缓存。
+
+视口对应的世界矩形，四边再扩出一段提前量：
+
+```ts
+const halfW = width / 2 / zoom
+const halfH = height / 2 / zoom
+const overscan = 80 / zoom
+
+const view = {
+  left: camera.x - halfW - overscan,
+  top: camera.y - halfH - overscan,
+  right: camera.x + halfW + overscan,
+  bottom: camera.y + halfH + overscan,
+}
+
+const visible = nodes.filter(
+  (n) => n.x < view.right && n.x + n.w > view.left && n.y < view.bottom && n.y + n.h > view.top
+)
+```
+
+`overscan` 让物体在进入画面前提前挂上，平移时不会在边缘突然冒出来。线性过滤在几千个节点时通常够用；等过滤本身变成热点，再上四叉树或 R 树。
+
+两件东西不要裁掉：正在拖的物体，哪怕中心已经出了视口，也要留在挂载集合里，否则 `pointerup` 会丢，物体粘在指针上；选中态同理。tldraw 用空间索引维护可见集合，视口外的形状设 `display: none`，选中和正在编辑的形状不参与剔除。
+
+裁剪不改变相机，只减少每帧要碰的物体。它可以叠在 DOM 上，也可以叠在 Canvas 上（Canvas 则是跳过视口外的 `drawShape`）。
+
+## 路线四：WebGL 与浮动原点
+
+图元到了万级，或者有大量图片、阴影、混合模式，绘制改到 GPU。相机还是那个矩阵，作为 uniform 传给着色器，顶点用世界坐标。Figma 的渲染器在这条路上走得最远：文档可以很大，真正画上去的只有视口里的那一部分。
+
+WebGL 的顶点通常是 float32。尾数 23 位，坐标到大约 `2^23`（约 800 万）时，相邻可表示的数已经隔了 1 个单位，再远线条就开始抖。JavaScript 里的坐标是 float64，DOM 和 Canvas 2D 的变换矩阵也是双精度，同样的距离往往还是稳的。所以上了 GPU 之后要做浮动原点：把相机位置（或把它吸附到一段网格上）从每个顶点里减掉，再写进缓冲，让着色器看到的数始终在原点附近；视图矩阵只保留视口内剩下的那点偏移。
+
+文本在 WebGL 里仍然贵。要么自己做字形图集，要么继续用路线一：算好屏幕坐标，叠一层 DOM。换渲染器不会让相机数学消失。
+
+## 怎么选
+
+| 路线           | 像素谁来填           | 命中与输入                       | 大致规模                   |
+| -------------- | -------------------- | -------------------------------- | -------------------------- |
+| DOM + CSS 变换 | 浏览器排版           | 自带                             | 几百个节点                 |
+| DOM + 视口裁剪 | 浏览器，只挂载可见的 | 自带                             | 数千个节点，同时可见的要少 |
+| Canvas 2D      | 每帧重画             | 自己做几何测试；编辑文本时叠 DOM | 几千个简单图元             |
+| WebGL          | 着色器               | 自己做；文本常常仍回退 DOM       | 数万图元、大量图片         |
+
+成熟产品几乎都在混用。tldraw 的形状默认是 DOM，选择框、参考线这类每帧都在变的东西画在单独的 canvas 上，避免拖拽时反复协调 React。Excalidraw 的场景在 Canvas 里。Figma 用 WebGL 扛文档规模。先把 `panBy` 和 `zoomAt` 写对，再按物体种类和数量决定谁来填像素。
+
+## 容易写错的地方
+
+1. **平移忘了除以 zoom。** 放大之后，手势要么拖不动，要么一下飞出屏幕。示例里可以放大到 200% 再拖，对照左上角的相机数字。
+2. **缩放锚在角落，没有锚在光标。** 光标下的内容会跑开。用 `zoomAt`：先记下世界点，再反解相机。
+3. **`transform-origin` 不是 `0 0`，或 translate 与 scale 的顺序和乘数不一致。** 世界层整体偏一块，拖便签时和光标错位。
+4. **`wheel` 监听是 passive 的。** `preventDefault` 不生效，页面跟着滚。要在 DOM 上以 `{ passive: false }` 注册，并给视口 `touch-action: none`，捏合才不会被浏览器当成滚动。
+5. **用超大宽高假装无限。** 一拖到元素边缘就穿帮，内存也浪费在永远看不见的区域上。坐标用数字，视口负责裁切。
+6. **命中测试混用两套坐标。** 图形存在世界坐标里，光标却拿屏幕像素去比。拖拽、点选都走同一套逆变换。
+7. **裁剪掉了正在交互的物体。** 拖出视口的瞬间节点被卸载，指针事件断了。交互中的 id 强制留在挂载集合里。
+
+## 小结
+
+无限来自坐标可以一直变大，不来自元素尺寸。顺序是：定好相机锚点，写对平移和「钉住光标」的缩放，再决定用 DOM、Canvas 还是 WebGL 填像素。物体多了就只处理视口里的那一截；上了 GPU，再处理 float32 的浮动原点。
+
+本站另一篇 [从 Hello World 入门 HTML-in-Canvas](/blog/html-in-canvas-hello-world) 解决的是相邻的另一件事：怎么把真实 DOM 画进位图。那条路同样要先有一块画布上的坐标，再谈绘制。
