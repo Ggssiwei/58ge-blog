@@ -2,8 +2,8 @@
 const siteMetadata = {
   title: "58Ge's Blog",
   author: 'GeSong',
-  headerTitle: "Someone's Blog",
-  description: 'Stay Shoshin',
+  headerTitle: "58Ge's Blog",
+  description: '永远是个初学者',
   language: 'zh-cn',
   theme: 'system', // system, dark or light
   siteUrl: 'https://blog.58ge.gs.cn/',
