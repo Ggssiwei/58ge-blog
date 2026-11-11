@@ -56,8 +56,7 @@ export default function HtmlInCanvasHelloWorld() {
       return
     }
 
-    const drawElementInto =
-      ctx.drawElementImage?.bind(ctx) ?? ctx.drawElement?.bind(ctx) ?? null
+    const drawElementInto = ctx.drawElementImage?.bind(ctx) ?? ctx.drawElement?.bind(ctx) ?? null
     if (!drawElementInto) {
       setStatus('unavailable')
       return
@@ -181,7 +180,8 @@ export default function HtmlInCanvasHelloWorld() {
           <div className="max-w-lg rounded-xl border border-white/10 bg-black/70 px-5 py-4 text-sm leading-6 text-gray-200 shadow-xl backdrop-blur-md">
             <p className="mb-2 text-base font-semibold text-white">HTML-in-Canvas 不可用</p>
             <p className="mb-3 text-gray-300">
-              当前浏览器未开启相关实验能力，无法运行下方 Demo。请按文章「先决条件」完成设置后刷新本页：
+              当前浏览器未开启相关实验能力，无法运行下方
+              Demo。请按文章「先决条件」完成设置后刷新本页：
             </p>
             <ol className="mb-3 list-decimal space-y-1 pl-5 text-gray-300">
               <li>使用 Chrome Canary，或 Chromium 147+ 的 Brave Stable</li>
@@ -190,8 +190,8 @@ export default function HtmlInCanvasHelloWorld() {
                 <code className="rounded bg-white/10 px-1.5 py-0.5 text-xs text-[#00e5b9]">
                   chrome://flags/#canvas-draw-element
                 </code>{' '}
-                （Brave 用 <code className="rounded bg-white/10 px-1.5 py-0.5 text-xs">brave://</code>
-                ）
+                （Brave 用{' '}
+                <code className="rounded bg-white/10 px-1.5 py-0.5 text-xs">brave://</code>）
               </li>
               <li>将 flag 设为 Enabled，重启浏览器后再访问</li>
             </ol>
