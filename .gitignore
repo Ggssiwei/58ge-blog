@@ -45,3 +45,9 @@ yarn-error.log*
 
 # Contentlayer
 .contentlayer
+
+# 本地构建脚本和导出的镜像包
+/deploy.sh
+/server.sh
+/58ge-blog.tar.gz
+/58ge-blog.tar.gz.tmp

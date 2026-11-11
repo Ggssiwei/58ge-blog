@@ -4,3 +4,6 @@ out
 .git
 .DS_Store
 *.log
+deploy.sh
+*.tar.gz
+*.tar.gz.tmp
