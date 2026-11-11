@@ -7,7 +7,7 @@ const siteMetadata = {
   language: 'zh-cn',
   theme: 'system', // system, dark or light
   siteUrl: 'https://blog.58ge.gs.cn/',
-  siteRepo: 'https://github.com/timlrx/tailwind-nextjs-starter-blog',
+  siteRepo: 'https://github.com/Ggssiwei/58ge-blog',
   siteLogo: `${process.env.BASE_PATH || ''}/static/images/logo.png`,
   socialBanner: `${process.env.BASE_PATH || ''}/static/images/twitter-card.png`,
   email: 'song58ge@gmail.com',

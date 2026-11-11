@@ -1,19 +1,19 @@
 {
   "canvas": 2,
-  "html": 1,
-  "chromium": 1,
   "web": 2,
   "javascript": 1,
   "设计模式": 5,
   "typescript": 5,
+  "singleton": 1,
+  "observer": 1,
+  "factory": 1,
   "adapter": 1,
   "decorator": 1,
-  "factory": 1,
-  "observer": 1,
-  "singleton": 1,
   "react": 4,
   "hooks": 4,
+  "useref": 1,
   "usecallback": 1,
   "useeffect": 1,
-  "useref": 1
+  "html": 1,
+  "chromium": 1
 }
