@@ -2,10 +2,8 @@
 # Stage 1: Dependencies Installation Stage
 # ============================================
 
-# IMPORTANT: Node.js Version Maintenance
-# This Dockerfile uses Node.js 24.13.0-slim, which was the latest LTS version at the time of writing.
-# To ensure security and compatibility, regularly update the NODE_VERSION ARG to the latest LTS version.
-ARG NODE_VERSION=24.13.0-slim
+# Node 24 的当前 slim 标签。24.13.0-slim 已不再是官方主标签，镜像源上经常拉不到。
+ARG NODE_VERSION=24.22.2-slim
 
 FROM node:${NODE_VERSION} AS dependencies
 
