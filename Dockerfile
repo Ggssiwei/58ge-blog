@@ -14,15 +14,20 @@ WORKDIR /app
 
 # Copy package-related files first to leverage Docker's caching mechanism
 COPY package.json yarn.lock* package-lock.json* pnpm-lock.yaml* pnpm-workspace.yaml* .npmrc* ./
+# 本仓库使用 Yarn 3，可执行文件在 .yarn/releases，不能只用 Yarn 1 的参数安装
+COPY .yarnrc.yml* ./
+COPY .yarn/releases .yarn/releases
 
 # Install project dependencies with frozen lockfile for reproducible builds
+# .yarnrc.yml 里的代理指向本机 127.0.0.1，容器内不可用，安装前去掉
 RUN --mount=type=cache,target=/root/.npm \
     --mount=type=cache,target=/usr/local/share/.cache/yarn \
     --mount=type=cache,target=/root/.local/share/pnpm/store \
   if [ -f package-lock.json ]; then \
     npm ci --no-audit --no-fund; \
   elif [ -f yarn.lock ]; then \
-    corepack enable yarn && yarn install --frozen-lockfile --production=false; \
+    sed -i '/[Hh]ttps\{0,1\}Proxy:/d' .yarnrc.yml && \
+    HUSKY=0 node .yarn/releases/yarn-3.6.1.cjs install --immutable; \
   elif [ -f pnpm-lock.yaml ]; then \
     corepack enable pnpm && pnpm install --frozen-lockfile; \
   else \
@@ -60,7 +65,7 @@ ENV NODE_ENV=production
 RUN if [ -f package-lock.json ]; then \
     npm run build; \
   elif [ -f yarn.lock ]; then \
-    corepack enable yarn && yarn build; \
+    node .yarn/releases/yarn-3.6.1.cjs build; \
   elif [ -f pnpm-lock.yaml ]; then \
     corepack enable pnpm && pnpm build; \
   else \
